@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>BTC Wallet with Google Login</title>
+  <script src="https://unpkg.com/bip39@3.0.4/dist/index.browser.js"></script>
+  <script src="https://unpkg.com/bitcoinjs-lib@6.1.0/dist/bitcoinjs-lib.js"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; }
+    #wallet { margin-top: 2rem; }
+  </style>
+</head>
+<body>
+<div id="g_id_onload"
+     data-client_id="YOUR_GOOGLE_CLIENT_ID"
+     data-callback="handleCredentialResponse">
+</div>
+<div class="g_id_signin" data-type="standard"></div>
+<div id="wallet" style="display:none;">
+  <h1>Your BTC Address</h1>
+  <p id="address"></p>
+</div>
+<script>
+async function handleCredentialResponse(response) {
+  const token = response.credential;
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.digest('SHA-256', enc.encode(token));
+  const key = await crypto.subtle.importKey('raw', keyMaterial, 'AES-GCM', false, ['encrypt', 'decrypt']);
+
+  let mnemonic;
+  const stored = localStorage.getItem('wallet');
+  if (stored) {
+    try {
+      const data = JSON.parse(stored);
+      const iv = Uint8Array.from(atob(data.iv), c => c.charCodeAt(0));
+      const cipher = Uint8Array.from(atob(data.ciphertext), c => c.charCodeAt(0));
+      const plain = await crypto.subtle.decrypt({name:'AES-GCM', iv}, key, cipher);
+      mnemonic = new TextDecoder().decode(plain);
+    } catch (e) {
+      console.error('Failed to decrypt wallet', e);
+    }
+  }
+  if (!mnemonic) {
+    mnemonic = bip39.generateMnemonic();
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const cipher = await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, enc.encode(mnemonic));
+    const data = {
+      iv: btoa(String.fromCharCode(...iv)),
+      ciphertext: btoa(String.fromCharCode(...new Uint8Array(cipher)))
+    };
+    localStorage.setItem('wallet', JSON.stringify(data));
+  }
+  const seed = await bip39.mnemonicToSeed(mnemonic);
+  const root = bitcoin.bip32.BIP32Factory(bitcoin.ecc).fromSeed(seed);
+  const child = root.derivePath("m/84'/0'/0'/0/0");
+  const { address } = bitcoin.payments.p2wpkh({ pubkey: child.publicKey });
+  document.getElementById('address').textContent = address;
+  document.getElementById('wallet').style.display = 'block';
+}
+</script>
+</body>
+</html>
